@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# environment
+.env
+.env.*
+!.env.example
+
+# logs and debugging
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# test and coverage output
+coverage/
+.nyc_output/
+
+# build / runtime output
+dist/
+build/
+uploads/
+
+# editor and system
+.DS_Store
+.vscode/
+.idea/
