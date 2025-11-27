@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
 const errorHandler = require('./middleware/error.middleware');
+const connectDB = require('./config/database');
 const { frontendUrl } = require('./config/env');
 
 const app = express();
@@ -28,6 +29,20 @@ app.use(compression());
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
+
+// 🔥 IMPORTANT: Ensure DB connection on every request
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error('Database connection failed:', error);
+    res.status(503).json({
+      success: false,
+      message: 'Database connection failed'
+    });
+  }
+});
 
 // Health check
 app.get('/health', (req, res) => {
