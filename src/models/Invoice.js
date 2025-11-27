@@ -83,7 +83,8 @@ const invoiceSchema = new mongoose.Schema({
   },
   customerId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Customer'
+    ref: 'Customer',
+    sparse: true // Allow null for B2C
   },
   customerDetails: {
     name: {
@@ -92,12 +93,15 @@ const invoiceSchema = new mongoose.Schema({
     },
     phone: String,
     email: String,
-    gstin: String,
+    gstin: {
+      type: String,
+      sparse: true
+    },
     address: String,
     city: String,
     state: {
       type: String,
-      required: true
+      required: false // Make optional - will be required only for B2B
     },
     pincode: String
   },

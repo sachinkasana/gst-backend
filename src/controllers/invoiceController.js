@@ -22,6 +22,21 @@ exports.createInvoice = async (req, res) => {
     // Get business details
     const business = await Business.findById(req.user.businessId);
     
+    // Validate required fields
+    if (!customerDetails || !customerDetails.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Customer name is required'
+      });
+    }
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one item is required'
+      });
+    }
+
     // Generate invoice number
     const invoiceNumber = await generateInvoiceNumber(business);
 
@@ -37,12 +52,15 @@ exports.createInvoice = async (req, res) => {
       const itemDiscount = item.discount || 0;
       const taxableAmount = itemSubtotal - itemDiscount;
 
+      // For B2C without state, use business state as default
+      const customerState = customerDetails.state || business.state;
+
       // Calculate GST based on states
       const gstAmount = calculateGST(
         taxableAmount,
         item.gstRate,
         business.state,
-        customerDetails.state
+        customerState
       );
 
       subtotal += itemSubtotal;
@@ -71,12 +89,16 @@ exports.createInvoice = async (req, res) => {
     const grandTotal = subtotal - totalDiscount + totalCGST + totalSGST + totalIGST;
 
     // Determine invoice type
-    const invoiceType = determineInvoiceType(
-      customerDetails.gstin,
-      business.state,
-      customerDetails.state,
-      grandTotal
-    );
+    // If B2C (no GSTIN), check amount for B2CS vs B2CL
+    let invoiceType = 'B2B';
+    if (!customerDetails.gstin) {
+      invoiceType = determineInvoiceType(
+        null, // no GSTIN for B2C
+        business.state,
+        customerDetails.state || business.state,
+        grandTotal
+      );
+    }
 
     // Create invoice
     const invoice = await Invoice.create({
@@ -85,7 +107,15 @@ exports.createInvoice = async (req, res) => {
       invoiceDate: new Date(),
       dueDate: dueDate || null,
       customerId: customerId || null,
-      customerDetails,
+      customerDetails: {
+        name: customerDetails.name,
+        phone: customerDetails.phone || '',
+        gstin: customerDetails.gstin || '',
+        address: customerDetails.address || '',
+        city: customerDetails.city || '',
+        state: customerDetails.state || business.state, // Use business state as fallback
+        pincode: customerDetails.pincode || ''
+      },
       items: processedItems,
       subtotal,
       totalDiscount,
@@ -120,6 +150,16 @@ exports.createInvoice = async (req, res) => {
       }
     }
 
+    // Save customer only if B2B (has GSTIN and customerId)
+    if (customerId && customerDetails.gstin) {
+      // Customer already saved, just update if needed
+      const existingCustomer = await Customer.findById(customerId);
+      if (existingCustomer) {
+        existingCustomer.usageCount = (existingCustomer.usageCount || 0) + 1;
+        await existingCustomer.save();
+      }
+    }
+
     // Populate customer details for response
     const populatedInvoice = await Invoice.findById(invoice._id)
       .populate('customerId', 'name phone gstin');
@@ -139,9 +179,7 @@ exports.createInvoice = async (req, res) => {
   }
 };
 
-// @desc    Get all invoices
-// @route   GET /api/invoices
-// @access  Private
+// Keep other exports as they are...
 exports.getInvoices = async (req, res) => {
   try {
     const {
@@ -217,9 +255,6 @@ exports.getInvoices = async (req, res) => {
   }
 };
 
-// @desc    Get single invoice
-// @route   GET /api/invoices/:id
-// @access  Private
 exports.getInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findOne({
@@ -248,9 +283,6 @@ exports.getInvoice = async (req, res) => {
   }
 };
 
-// @desc    Update invoice
-// @route   PUT /api/invoices/:id
-// @access  Private
 exports.updateInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findOne({
@@ -273,8 +305,6 @@ exports.updateInvoice = async (req, res) => {
       });
     }
 
-    // Similar logic to create invoice
-    // For brevity, allowing only specific fields to update
     const { notes, dueDate } = req.body;
 
     if (notes !== undefined) invoice.notes = notes;
@@ -297,9 +327,6 @@ exports.updateInvoice = async (req, res) => {
   }
 };
 
-// @desc    Delete invoice
-// @route   DELETE /api/invoices/:id
-// @access  Private
 exports.deleteInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findOne({
@@ -338,9 +365,6 @@ exports.deleteInvoice = async (req, res) => {
   }
 };
 
-// @desc    Get dashboard stats
-// @route   GET /api/invoices/stats/dashboard
-// @access  Private
 exports.getDashboardStats = async (req, res) => {
   try {
     const businessId = req.user.businessId;
