@@ -9,6 +9,7 @@ exports.getSalesRegister = async (req, res) => {
   try {
     const { startDate, endDate, format = 'json' } = req.query;
 
+    // Validate dates
     if (!startDate || !endDate) {
       return res.status(400).json({
         success: false,
@@ -16,14 +17,29 @@ exports.getSalesRegister = async (req, res) => {
       });
     }
 
+    // Parse dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    if (start > end) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date must be before end date'
+      });
+    }
+
+    // Fetch invoices
     const invoices = await Invoice.find({
       businessId: req.user.businessId,
       isDraft: false,
       invoiceDate: {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: start,
+        $lte: end
       }
-    }).sort({ invoiceDate: 1 });
+    })
+    .populate('customerId', 'name phone gstin')
+    .sort({ invoiceDate: 1 });
 
     if (format === 'excel') {
       const business = await Business.findById(req.user.businessId);
@@ -36,7 +52,8 @@ exports.getSalesRegister = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: invoices
+      data: invoices,
+      count: invoices.length
     });
   } catch (error) {
     console.error('Get Sales Register Error:', error);
@@ -62,14 +79,28 @@ exports.getGSTR1Report = async (req, res) => {
       });
     }
 
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    if (start > end) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date must be before end date'
+      });
+    }
+
+    // Fetch invoices
     const invoices = await Invoice.find({
       businessId: req.user.businessId,
       isDraft: false,
       invoiceDate: {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: start,
+        $lte: end
       }
-    }).sort({ invoiceDate: 1 });
+    })
+    .populate('customerId', 'name phone gstin')
+    .sort({ invoiceDate: 1 });
 
     // Separate by invoice type
     const b2bInvoices = invoices.filter(inv => inv.invoiceType === 'B2B');
@@ -99,10 +130,35 @@ exports.getGSTR1Report = async (req, res) => {
       });
     });
 
+    // Aggregate B2CL by rate
+    const b2clAggregated = {};
+    b2clInvoices.forEach(inv => {
+      inv.items.forEach(item => {
+        const key = `${item.gstRate}`;
+        if (!b2clAggregated[key]) {
+          b2clAggregated[key] = {
+            gstRate: item.gstRate,
+            taxableAmount: 0,
+            igst: 0,
+            totalAmount: 0,
+            count: 0
+          };
+        }
+        b2clAggregated[key].taxableAmount += item.taxableAmount;
+        b2clAggregated[key].igst += item.igst;
+        b2clAggregated[key].totalAmount += item.totalAmount;
+        b2clAggregated[key].count += 1;
+      });
+    });
+
     if (format === 'excel') {
       const business = await Business.findById(req.user.businessId);
       const buffer = await generateGSTR1Excel(
-        { b2b: b2bInvoices, b2cs: Object.values(b2csAggregated), b2cl: b2clInvoices },
+        {
+          b2b: b2bInvoices,
+          b2cs: Object.values(b2csAggregated),
+          b2cl: Object.values(b2clAggregated)
+        },
         business,
         startDate,
         endDate
@@ -118,7 +174,12 @@ exports.getGSTR1Report = async (req, res) => {
       data: {
         b2b: b2bInvoices,
         b2cs: Object.values(b2csAggregated),
-        b2cl: b2clInvoices
+        b2cl: Object.values(b2clAggregated),
+        summary: {
+          b2bCount: b2bInvoices.length,
+          b2csCount: b2csInvoices.length,
+          b2clCount: b2clInvoices.length
+        }
       }
     });
   } catch (error) {
@@ -145,14 +206,26 @@ exports.getTaxSummary = async (req, res) => {
       });
     }
 
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    if (start > end) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date must be before end date'
+      });
+    }
+
+    // Aggregate tax data by rate
     const summary = await Invoice.aggregate([
       {
         $match: {
           businessId: req.user.businessId,
           isDraft: false,
           invoiceDate: {
-            $gte: new Date(startDate),
-            $lte: new Date(endDate)
+            $gte: start,
+            $lte: end
           }
         }
       },
@@ -166,7 +239,13 @@ exports.getTaxSummary = async (req, res) => {
           cgst: { $sum: '$items.cgst' },
           sgst: { $sum: '$items.sgst' },
           igst: { $sum: '$items.igst' },
-          totalAmount: { $sum: '$items.totalAmount' }
+          totalTax: {
+            $sum: {
+              $add: ['$items.cgst', '$items.sgst', '$items.igst']
+            }
+          },
+          totalAmount: { $sum: '$items.totalAmount' },
+          invoiceCount: { $sum: 1 }
         }
       },
       {
@@ -174,13 +253,26 @@ exports.getTaxSummary = async (req, res) => {
       }
     ]);
 
+    // Calculate totals
     const totals = {
-      taxableAmount: summary.reduce((sum, item) => sum + item.taxableAmount, 0),
-      cgst: summary.reduce((sum, item) => sum + item.cgst, 0),
-      sgst: summary.reduce((sum, item) => sum + item.sgst, 0),
-      igst: summary.reduce((sum, item) => sum + item.igst, 0),
-      totalAmount: summary.reduce((sum, item) => sum + item.totalAmount, 0)
+      taxableAmount: 0,
+      cgst: 0,
+      sgst: 0,
+      igst: 0,
+      totalTax: 0,
+      totalAmount: 0,
+      invoiceCount: 0
     };
+
+    summary.forEach(item => {
+      totals.taxableAmount += item.taxableAmount;
+      totals.cgst += item.cgst;
+      totals.sgst += item.sgst;
+      totals.igst += item.igst;
+      totals.totalTax += item.totalTax;
+      totals.totalAmount += item.totalAmount;
+      totals.invoiceCount += item.invoiceCount;
+    });
 
     if (format === 'excel') {
       const business = await Business.findById(req.user.businessId);
