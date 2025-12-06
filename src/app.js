@@ -5,18 +5,14 @@ const compression = require('compression');
 const morgan = require('morgan');
 const errorHandler = require('./middleware/error.middleware');
 const connectDB = require('./config/database');
-const { frontendUrl } = require('./config/env');
 
 const app = express();
 
 // Security middleware
 app.use(helmet());
 
-// CORS
-app.use(cors({
-  origin: frontendUrl,
-  credentials: true
-}));
+// CORS (allow all origins)
+app.use(cors());
 
 // Body parser
 app.use(express.json());
