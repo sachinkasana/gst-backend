@@ -159,6 +159,11 @@ const invoiceSchema = new mongoose.Schema({
     enum: ['B2B', 'B2CS', 'B2CL'],
     required: true
   },
+  invoiceTemplate: {
+    type: String,
+    enum: ['classic', 'modern'],
+    default: 'classic'
+  },
   isDraft: {
     type: Boolean,
     default: false

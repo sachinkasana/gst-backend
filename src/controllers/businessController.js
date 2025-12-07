@@ -1,4 +1,5 @@
 const Business = require('../models/Business');
+const ALLOWED_TEMPLATES = ['classic', 'modern'];
 
 // @desc    Get business details
 // @route   GET /api/business
@@ -45,7 +46,8 @@ exports.updateBusiness = async (req, res) => {
       phone,
       invoicePrefix,
       bankDetails,
-      termsConditions
+      termsConditions,
+      defaultInvoiceTemplate
     } = req.body;
 
     const business = await Business.findOne({ 
@@ -70,6 +72,11 @@ exports.updateBusiness = async (req, res) => {
     if (invoicePrefix) business.invoicePrefix = invoicePrefix;
     if (bankDetails) business.bankDetails = bankDetails;
     if (termsConditions) business.termsConditions = termsConditions;
+    if (defaultInvoiceTemplate) {
+      business.defaultInvoiceTemplate = ALLOWED_TEMPLATES.includes(defaultInvoiceTemplate)
+        ? defaultInvoiceTemplate
+        : business.defaultInvoiceTemplate;
+    }
 
     await business.save();
 
@@ -95,7 +102,7 @@ exports.getInvoiceSettings = async (req, res) => {
   try {
     const business = await Business.findOne({ 
       userId: req.user.id 
-    }).select('invoicePrefix invoiceCounter termsConditions bankDetails');
+    }).select('invoicePrefix invoiceCounter termsConditions bankDetails defaultInvoiceTemplate');
 
     res.status(200).json({
       success: true,

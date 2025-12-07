@@ -7,13 +7,15 @@ const {
   updateInvoice,
   deleteInvoice,
   getDashboardStats,
-  downloadInvoicePdf
+  downloadInvoicePdf,
+  getInvoiceTemplates
 } = require('../controllers/invoiceController');
 const { protect } = require('../middleware/auth.middleware');
 
 router.use(protect); // All routes are protected
 
 router.get('/stats/dashboard', getDashboardStats);
+router.get('/templates', getInvoiceTemplates);
 
 router.route('/')
   .get(getInvoices)

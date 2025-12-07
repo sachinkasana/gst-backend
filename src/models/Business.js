@@ -65,6 +65,11 @@ const businessSchema = new mongoose.Schema({
     type: String,
     default: 'Payment is due within 7 days from the date of invoice.'
   },
+  defaultInvoiceTemplate: {
+    type: String,
+    enum: ['classic', 'modern'],
+    default: 'classic'
+  },
   signature: {
     type: String // URL or file path
   }

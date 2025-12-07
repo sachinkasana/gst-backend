@@ -6,6 +6,37 @@ const Product = require('../models/Product');
 const { calculateGST, determineInvoiceType } = require('../utils/gstCalculator');
 const { generateInvoiceNumber } = require('../utils/invoiceNumberGenerator');
 
+const INVOICE_TEMPLATES = [
+  { id: 'classic', name: 'Classic' },
+  { id: 'modern', name: 'Modern' }
+];
+
+const resolveInvoiceTemplate = (template, fallback = 'classic') => {
+  const ids = INVOICE_TEMPLATES.map((t) => t.id);
+  if (ids.includes(template)) return template;
+  if (ids.includes(fallback)) return fallback;
+  return 'classic';
+};
+
+const TEMPLATE_THEMES = {
+  classic: {
+    headerFill: '#f5f5f5',
+    rowFill: '#fcfcfc',
+    borderColor: '#e5e5e5',
+    summaryFill: null,
+    accent: '#000000',
+    titleColor: '#000000'
+  },
+  modern: {
+    headerFill: '#e8f0ff',
+    rowFill: '#f6f8ff',
+    borderColor: '#d7def5',
+    summaryFill: '#eef2ff',
+    accent: '#2563eb',
+    titleColor: '#111827'
+  }
+};
+
 // @desc    Create new invoice
 // @route   POST /api/invoices
 // @access  Private
@@ -17,7 +48,8 @@ exports.createInvoice = async (req, res) => {
       items,
       dueDate,
       notes,
-      isDraft
+      isDraft,
+      invoiceTemplate
     } = req.body;
 
     // Get business details
@@ -107,6 +139,7 @@ exports.createInvoice = async (req, res) => {
       invoiceNumber,
       invoiceDate: new Date(),
       dueDate: dueDate || null,
+      invoiceTemplate: resolveInvoiceTemplate(invoiceTemplate, business.defaultInvoiceTemplate),
       customerId: customerId || null,
       customerDetails: {
         name: customerDetails.name,
@@ -179,6 +212,179 @@ exports.createInvoice = async (req, res) => {
     });
   }
 };
+
+// @desc    List supported invoice PDF templates
+// @route   GET /api/invoices/templates
+// @access  Private
+exports.getInvoiceTemplates = async (_req, res) => {
+  res.status(200).json({
+    success: true,
+    data: INVOICE_TEMPLATES
+  });
+};
+
+function renderInvoiceTemplate(doc, invoice, business, formatCurrency, formatDate, theme = {}) {
+  const colors = {
+    headerFill: theme.headerFill || '#f5f5f5',
+    rowFill: theme.rowFill || '#fcfcfc',
+    borderColor: theme.borderColor || '#e5e5e5',
+    summaryFill: theme.summaryFill || null,
+    accent: theme.accent || '#000000',
+    titleColor: theme.titleColor || '#000000'
+  };
+
+  const addLabelValue = (label, value, x, y, options = {}) => {
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(colors.accent).text(label, x, y, options);
+    doc.font('Helvetica').fontSize(10).fillColor('#000000').text(value, x + (options.labelWidth || 70), y, options);
+  };
+
+  // Header: business (left) + invoice meta (right)
+  const headerTop = doc.y;
+  const rightColumnX = 330;
+
+  doc.font('Helvetica-Bold').fontSize(18).fillColor(colors.titleColor).text(business.name || 'Invoice', 40, headerTop);
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  const businessLines = [
+    business.address,
+    [business.city, business.state].filter(Boolean).join(', '),
+    business.pincode ? `PIN: ${business.pincode}` : '',
+    business.phone ? `Phone: ${business.phone}` : '',
+    business.email ? `Email: ${business.email}` : '',
+    business.gstin ? `GSTIN: ${business.gstin}` : ''
+  ].filter(Boolean);
+  businessLines.forEach((line) => doc.text(line, 40));
+
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(colors.accent).text('Invoice', rightColumnX, headerTop, { align: 'left' });
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  addLabelValue('Invoice No:', invoice.invoiceNumber || '-', rightColumnX, headerTop + 18, { labelWidth: 70 });
+  addLabelValue('Date:', formatDate(invoice.invoiceDate), rightColumnX, headerTop + 32, { labelWidth: 70 });
+  addLabelValue('Due Date:', formatDate(invoice.dueDate), rightColumnX, headerTop + 46, { labelWidth: 70 });
+  addLabelValue('Type:', invoice.invoiceType || '-', rightColumnX, headerTop + 60, { labelWidth: 70 });
+  addLabelValue('Place of Supply:', invoice.customerDetails.state || business.state || '-', rightColumnX, headerTop + 74, { labelWidth: 70 });
+
+  doc.moveDown(2);
+  doc.moveTo(40, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).strokeColor(colors.borderColor).stroke();
+  doc.moveDown();
+
+  // Customer block
+  doc.font('Helvetica-Bold').fontSize(12).fillColor(colors.titleColor).text('Bill To');
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  const customerLines = [
+    invoice.customerDetails.name,
+    invoice.customerDetails.address,
+    [invoice.customerDetails.city, invoice.customerDetails.state].filter(Boolean).join(', '),
+    invoice.customerDetails.pincode ? `PIN: ${invoice.customerDetails.pincode}` : '',
+    invoice.customerDetails.phone ? `Phone: ${invoice.customerDetails.phone}` : '',
+    invoice.customerDetails.gstin ? `GSTIN: ${invoice.customerDetails.gstin}` : ''
+  ].filter(Boolean);
+  customerLines.forEach((line) => doc.text(line, 40));
+
+  doc.moveDown(0.5);
+
+  // Items table
+  const tableTop = doc.y + 10;
+  const tableWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const columns = [
+    { label: 'Item', property: 'productName', width: 150, align: 'left' },
+    { label: 'HSN/SAC', property: 'hsnCode', width: 60, align: 'left' },
+    { label: 'Qty', property: 'quantity', width: 40, align: 'right' },
+    { label: 'Rate', property: 'rate', width: 70, align: 'right', formatter: formatCurrency },
+    { label: 'GST', property: 'gstRate', width: 40, align: 'right', formatter: (v) => `${v}%` },
+    { label: 'Taxable', property: 'taxableAmount', width: 70, align: 'right', formatter: formatCurrency },
+    { label: 'Amount', property: 'totalAmount', width: 80, align: 'right', formatter: formatCurrency }
+  ];
+
+  doc.save();
+  doc.rect(40, tableTop, tableWidth, 22).fill(colors.headerFill);
+  doc.restore();
+
+  doc.fillColor(colors.titleColor).font('Helvetica-Bold').fontSize(10);
+  let currentX = 45;
+  columns.forEach((col) => {
+    doc.text(col.label, currentX, tableTop + 6, { width: col.width, align: col.align });
+    currentX += col.width + 10;
+  });
+
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  let rowY = tableTop + 26;
+  invoice.items.forEach((item, index) => {
+    currentX = 45;
+    const rowHeight = 18;
+
+    if (index % 2 === 0) {
+      doc.save();
+      doc.rect(40, rowY - 2, tableWidth, rowHeight).fill(colors.rowFill);
+      doc.restore();
+      doc.fillColor('#000000');
+    }
+
+    columns.forEach((col) => {
+      const value = col.formatter ? col.formatter(item[col.property] || 0) : (item[col.property] || '');
+      doc.text(value, currentX, rowY + 2, { width: col.width, align: col.align });
+      currentX += col.width + 10;
+    });
+    rowY += rowHeight;
+  });
+
+  doc.moveTo(40, tableTop).lineTo(40, rowY - 2).strokeColor(colors.borderColor).stroke();
+  doc.moveTo(doc.page.width - doc.page.margins.right, tableTop).lineTo(doc.page.width - doc.page.margins.right, rowY - 2).strokeColor(colors.borderColor).stroke();
+  doc.moveDown(1);
+  doc.y = rowY + 6;
+
+  // Totals and payment summary block
+  const summaryWidth = 220;
+  const summaryX = doc.page.width - doc.page.margins.right - summaryWidth;
+  const summaryTop = doc.y;
+
+  const addSummaryLine = (label, value, bold = false) => {
+    doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(10).fillColor('#000000');
+    doc.text(label, summaryX + 10, doc.y, { width: 110 });
+    doc.text(value, summaryX + 120, doc.y, { width: 80, align: 'right' });
+    doc.moveDown(0.4);
+  };
+
+  doc.save();
+  if (colors.summaryFill) {
+    doc.rect(summaryX, summaryTop - 6, summaryWidth, 140).fill(colors.summaryFill);
+  }
+  doc.rect(summaryX, summaryTop - 6, summaryWidth, 140).strokeColor(colors.borderColor).stroke();
+  doc.restore();
+
+  doc.y = summaryTop;
+  addSummaryLine('Subtotal', formatCurrency(invoice.subtotal));
+  addSummaryLine('Discount', formatCurrency(invoice.totalDiscount || 0));
+
+  if ((invoice.totalCGST || 0) > 0 || (invoice.totalSGST || 0) > 0) {
+    addSummaryLine('CGST', formatCurrency(invoice.totalCGST || 0));
+    addSummaryLine('SGST', formatCurrency(invoice.totalSGST || 0));
+  } else {
+    addSummaryLine('IGST', formatCurrency(invoice.totalIGST || 0));
+  }
+
+  addSummaryLine('Grand Total', formatCurrency(invoice.grandTotal || 0), true);
+
+  doc.moveDown();
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(colors.accent).text('Payment', summaryX + 10, doc.y);
+  doc.moveDown(0.2);
+  doc.font('Helvetica').fontSize(10).fillColor('#000000');
+  addSummaryLine('Status', invoice.paymentStatus || '-', false);
+  addSummaryLine('Paid', formatCurrency(invoice.amountPaid || 0), false);
+  addSummaryLine('Due', formatCurrency(invoice.amountDue || 0), true);
+
+  doc.moveDown(1);
+
+  // Notes and terms
+  if (invoice.notes) {
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.titleColor).text('Notes');
+    doc.font('Helvetica').fontSize(10).fillColor('#000000').text(invoice.notes);
+    doc.moveDown(0.5);
+  }
+
+  if (business.termsConditions) {
+    doc.font('Helvetica-Bold').fontSize(11).fillColor(colors.titleColor).text('Terms & Conditions');
+    doc.font('Helvetica').fontSize(10).fillColor('#000000').text(business.termsConditions);
+  }
+}
 
 // Keep other exports as they are...
 exports.getInvoices = async (req, res) => {
@@ -306,10 +512,13 @@ exports.updateInvoice = async (req, res) => {
       });
     }
 
-    const { notes, dueDate } = req.body;
+    const { notes, dueDate, invoiceTemplate } = req.body;
 
     if (notes !== undefined) invoice.notes = notes;
     if (dueDate) invoice.dueDate = dueDate;
+    if (invoiceTemplate) {
+      invoice.invoiceTemplate = resolveInvoiceTemplate(invoiceTemplate, invoice.invoiceTemplate);
+    }
 
     await invoice.save();
 
@@ -499,7 +708,18 @@ exports.downloadInvoicePdf = async (req, res) => {
     }
 
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    const formatCurrency = (value) => `₹${Number(value || 0).toFixed(2)}`;
+    const formatCurrency = (value) =>
+      new Intl.NumberFormat('en-IN', {
+        style: 'currency',
+        currency: 'INR',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(Number(value || 0));
+    const formatDate = (date) =>
+      date ? new Date(date).toLocaleDateString('en-GB') : 'N/A';
+    const selectedTemplate = resolveInvoiceTemplate(
+      invoice.invoiceTemplate || business.defaultInvoiceTemplate
+    );
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${invoice.invoiceNumber || 'invoice'}.pdf`);
@@ -512,97 +732,8 @@ exports.downloadInvoicePdf = async (req, res) => {
     });
 
     doc.pipe(res);
-
-    // Header
-    doc.fontSize(20).text(business.name || 'Invoice', { align: 'left' });
-    doc.moveDown(0.5);
-    if (business.address) doc.fontSize(10).text(business.address);
-    if (business.city || business.state) {
-      doc.text([business.city, business.state].filter(Boolean).join(', '));
-    }
-    if (business.pincode) doc.text(`PIN: ${business.pincode}`);
-    if (business.phone) doc.text(`Phone: ${business.phone}`);
-    if (business.email) doc.text(`Email: ${business.email}`);
-    if (business.gstin) doc.text(`GSTIN: ${business.gstin}`);
-
-    doc.moveDown();
-    doc.fontSize(16).text(`Invoice ${invoice.invoiceNumber}`, { align: 'right' });
-    doc.fontSize(10).text(`Invoice Date: ${new Date(invoice.invoiceDate).toLocaleDateString()}`, { align: 'right' });
-    doc.text(`Due Date: ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'N/A'}`, { align: 'right' });
-    doc.text(`Type: ${invoice.invoiceType}`, { align: 'right' });
-
-    doc.moveDown();
-
-    // Customer details
-    doc.fontSize(12).text('Bill To:', { underline: true });
-    doc.fontSize(10);
-    doc.text(invoice.customerDetails.name);
-    if (invoice.customerDetails.address) doc.text(invoice.customerDetails.address);
-    const cityState = [invoice.customerDetails.city, invoice.customerDetails.state].filter(Boolean).join(', ');
-    if (cityState) doc.text(cityState);
-    if (invoice.customerDetails.pincode) doc.text(`PIN: ${invoice.customerDetails.pincode}`);
-    if (invoice.customerDetails.phone) doc.text(`Phone: ${invoice.customerDetails.phone}`);
-    if (invoice.customerDetails.gstin) doc.text(`GSTIN: ${invoice.customerDetails.gstin}`);
-
-    doc.moveDown();
-
-    // Items table header
-    const tableTop = doc.y;
-    doc.font('Helvetica-Bold');
-    doc.text('Item', 40, tableTop);
-    doc.text('Qty', 250, tableTop);
-    doc.text('Rate', 300, tableTop);
-    doc.text('GST', 360, tableTop);
-    doc.text('Amount', 430, tableTop);
-    doc.moveDown();
-
-    // Items rows
-    doc.font('Helvetica');
-    invoice.items.forEach((item, index) => {
-      const y = tableTop + 20 + (index * 18);
-      doc.text(item.productName, 40, y, { width: 180 });
-      doc.text(item.quantity, 250, y);
-      doc.text(formatCurrency(item.rate), 300, y);
-      doc.text(`${item.gstRate}%`, 360, y);
-      doc.text(formatCurrency(item.totalAmount), 430, y);
-    });
-
-    doc.moveDown(2);
-
-    // Totals
-    const summaryX = 360;
-    doc.font('Helvetica-Bold');
-    const addSummaryLine = (label, value) => {
-      const y = doc.y;
-      doc.text(label, summaryX, y);
-      doc.text(value, summaryX + 80, y);
-      doc.moveDown(0.5);
-    };
-
-    addSummaryLine('Subtotal:', formatCurrency(invoice.subtotal));
-    addSummaryLine('Discount:', formatCurrency(invoice.totalDiscount));
-    addSummaryLine('CGST:', formatCurrency(invoice.totalCGST));
-    addSummaryLine('SGST:', formatCurrency(invoice.totalSGST));
-    addSummaryLine('IGST:', formatCurrency(invoice.totalIGST));
-    addSummaryLine('Grand Total:', formatCurrency(invoice.grandTotal));
-
-    doc.moveDown();
-    doc.font('Helvetica');
-    doc.text(`Payment Status: ${invoice.paymentStatus}`);
-    doc.text(`Amount Paid: ${formatCurrency(invoice.amountPaid || 0)}`);
-    doc.text(`Amount Due: ${formatCurrency(invoice.amountDue || 0)}`);
-
-    if (invoice.notes) {
-      doc.moveDown();
-      doc.font('Helvetica-Bold').text('Notes:');
-      doc.font('Helvetica').text(invoice.notes);
-    }
-
-    if (business.termsConditions) {
-      doc.moveDown();
-      doc.font('Helvetica-Bold').text('Terms & Conditions:');
-      doc.font('Helvetica').text(business.termsConditions);
-    }
+    const theme = TEMPLATE_THEMES[selectedTemplate] || TEMPLATE_THEMES.classic;
+    renderInvoiceTemplate(doc, invoice, business, formatCurrency, formatDate, theme);
 
     doc.end();
   } catch (error) {
