@@ -46,6 +46,7 @@ exports.createInvoice = async (req, res) => {
       customerId,
       customerDetails,
       items,
+      invoiceDate,
       dueDate,
       notes,
       isDraft,
@@ -137,7 +138,7 @@ exports.createInvoice = async (req, res) => {
     const invoice = await Invoice.create({
       businessId: req.user.businessId,
       invoiceNumber,
-      invoiceDate: new Date(),
+      invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
       dueDate: dueDate || null,
       invoiceTemplate: resolveInvoiceTemplate(invoiceTemplate, business.defaultInvoiceTemplate),
       customerId: customerId || null,
@@ -708,13 +709,11 @@ exports.downloadInvoicePdf = async (req, res) => {
     }
 
     const doc = new PDFDocument({ size: 'A4', margin: 40 });
-    const formatCurrency = (value) =>
-      new Intl.NumberFormat('en-IN', {
-        style: 'currency',
-        currency: 'INR',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }).format(Number(value || 0));
+    const currencyFormatter = new Intl.NumberFormat('en-IN', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+    const formatCurrency = (value) => `Rs. ${currencyFormatter.format(Number(value || 0))}`;
     const formatDate = (date) =>
       date ? new Date(date).toLocaleDateString('en-GB') : 'N/A';
     const selectedTemplate = resolveInvoiceTemplate(
