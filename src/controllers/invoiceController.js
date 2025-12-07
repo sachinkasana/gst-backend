@@ -1,3 +1,4 @@
+const PDFDocument = require('pdfkit');
 const Invoice = require('../models/Invoice');
 const Business = require('../models/Business');
 const Customer = require('../models/Customer');
@@ -464,6 +465,148 @@ exports.getDashboardStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Get Dashboard Stats Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+// @desc    Download invoice PDF
+// @route   GET /api/invoices/:id/pdf
+// @access  Private
+exports.downloadInvoicePdf = async (req, res) => {
+  try {
+    const invoice = await Invoice.findOne({
+      _id: req.params.id,
+      businessId: req.user.businessId
+    }).populate('customerId', 'name phone gstin email');
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice not found'
+      });
+    }
+
+    const business = await Business.findById(req.user.businessId);
+    if (!business) {
+      return res.status(404).json({
+        success: false,
+        message: 'Business not found'
+      });
+    }
+
+    const doc = new PDFDocument({ size: 'A4', margin: 40 });
+    const formatCurrency = (value) => `₹${Number(value || 0).toFixed(2)}`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=${invoice.invoiceNumber || 'invoice'}.pdf`);
+
+    doc.on('error', (err) => {
+      console.error('PDF generation error:', err);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    });
+
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(20).text(business.name || 'Invoice', { align: 'left' });
+    doc.moveDown(0.5);
+    if (business.address) doc.fontSize(10).text(business.address);
+    if (business.city || business.state) {
+      doc.text([business.city, business.state].filter(Boolean).join(', '));
+    }
+    if (business.pincode) doc.text(`PIN: ${business.pincode}`);
+    if (business.phone) doc.text(`Phone: ${business.phone}`);
+    if (business.email) doc.text(`Email: ${business.email}`);
+    if (business.gstin) doc.text(`GSTIN: ${business.gstin}`);
+
+    doc.moveDown();
+    doc.fontSize(16).text(`Invoice ${invoice.invoiceNumber}`, { align: 'right' });
+    doc.fontSize(10).text(`Invoice Date: ${new Date(invoice.invoiceDate).toLocaleDateString()}`, { align: 'right' });
+    doc.text(`Due Date: ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'N/A'}`, { align: 'right' });
+    doc.text(`Type: ${invoice.invoiceType}`, { align: 'right' });
+
+    doc.moveDown();
+
+    // Customer details
+    doc.fontSize(12).text('Bill To:', { underline: true });
+    doc.fontSize(10);
+    doc.text(invoice.customerDetails.name);
+    if (invoice.customerDetails.address) doc.text(invoice.customerDetails.address);
+    const cityState = [invoice.customerDetails.city, invoice.customerDetails.state].filter(Boolean).join(', ');
+    if (cityState) doc.text(cityState);
+    if (invoice.customerDetails.pincode) doc.text(`PIN: ${invoice.customerDetails.pincode}`);
+    if (invoice.customerDetails.phone) doc.text(`Phone: ${invoice.customerDetails.phone}`);
+    if (invoice.customerDetails.gstin) doc.text(`GSTIN: ${invoice.customerDetails.gstin}`);
+
+    doc.moveDown();
+
+    // Items table header
+    const tableTop = doc.y;
+    doc.font('Helvetica-Bold');
+    doc.text('Item', 40, tableTop);
+    doc.text('Qty', 250, tableTop);
+    doc.text('Rate', 300, tableTop);
+    doc.text('GST', 360, tableTop);
+    doc.text('Amount', 430, tableTop);
+    doc.moveDown();
+
+    // Items rows
+    doc.font('Helvetica');
+    invoice.items.forEach((item, index) => {
+      const y = tableTop + 20 + (index * 18);
+      doc.text(item.productName, 40, y, { width: 180 });
+      doc.text(item.quantity, 250, y);
+      doc.text(formatCurrency(item.rate), 300, y);
+      doc.text(`${item.gstRate}%`, 360, y);
+      doc.text(formatCurrency(item.totalAmount), 430, y);
+    });
+
+    doc.moveDown(2);
+
+    // Totals
+    const summaryX = 360;
+    doc.font('Helvetica-Bold');
+    const addSummaryLine = (label, value) => {
+      const y = doc.y;
+      doc.text(label, summaryX, y);
+      doc.text(value, summaryX + 80, y);
+      doc.moveDown(0.5);
+    };
+
+    addSummaryLine('Subtotal:', formatCurrency(invoice.subtotal));
+    addSummaryLine('Discount:', formatCurrency(invoice.totalDiscount));
+    addSummaryLine('CGST:', formatCurrency(invoice.totalCGST));
+    addSummaryLine('SGST:', formatCurrency(invoice.totalSGST));
+    addSummaryLine('IGST:', formatCurrency(invoice.totalIGST));
+    addSummaryLine('Grand Total:', formatCurrency(invoice.grandTotal));
+
+    doc.moveDown();
+    doc.font('Helvetica');
+    doc.text(`Payment Status: ${invoice.paymentStatus}`);
+    doc.text(`Amount Paid: ${formatCurrency(invoice.amountPaid || 0)}`);
+    doc.text(`Amount Due: ${formatCurrency(invoice.amountDue || 0)}`);
+
+    if (invoice.notes) {
+      doc.moveDown();
+      doc.font('Helvetica-Bold').text('Notes:');
+      doc.font('Helvetica').text(invoice.notes);
+    }
+
+    if (business.termsConditions) {
+      doc.moveDown();
+      doc.font('Helvetica-Bold').text('Terms & Conditions:');
+      doc.font('Helvetica').text(business.termsConditions);
+    }
+
+    doc.end();
+  } catch (error) {
+    console.error('Download Invoice PDF Error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error',

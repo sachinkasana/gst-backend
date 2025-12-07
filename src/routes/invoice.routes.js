@@ -6,7 +6,8 @@ const {
   getInvoice,
   updateInvoice,
   deleteInvoice,
-  getDashboardStats
+  getDashboardStats,
+  downloadInvoicePdf
 } = require('../controllers/invoiceController');
 const { protect } = require('../middleware/auth.middleware');
 
@@ -17,6 +18,8 @@ router.get('/stats/dashboard', getDashboardStats);
 router.route('/')
   .get(getInvoices)
   .post(createInvoice);
+
+router.get('/:id/pdf', downloadInvoicePdf);
 
 router.route('/:id')
   .get(getInvoice)

@@ -27,3 +27,6 @@ uploads/
 .DS_Store
 .vscode/
 .idea/
+
+._.*
+._*
