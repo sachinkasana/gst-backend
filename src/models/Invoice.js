@@ -161,8 +161,8 @@ const invoiceSchema = new mongoose.Schema({
   },
   invoiceTemplate: {
     type: String,
-    enum: ['classic', 'modern'],
-    default: 'classic'
+    enum: ['gst', 'classic', 'modern'],
+    default: 'gst'
   },
   isDraft: {
     type: Boolean,
