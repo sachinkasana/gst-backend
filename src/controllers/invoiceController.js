@@ -7,9 +7,7 @@ const { calculateGST, determineInvoiceType } = require('../utils/gstCalculator')
 const { generateInvoiceNumber } = require('../utils/invoiceNumberGenerator');
 
 const INVOICE_TEMPLATES = [
-  { id: 'gst', name: 'GST Standard' },
-  { id: 'classic', name: 'Classic' },
-  { id: 'modern', name: 'Modern' }
+  { id: 'gst', name: 'GST Standard' }
 ];
 
 const resolveInvoiceTemplate = (template, fallback = 'gst') => {
@@ -17,25 +15,6 @@ const resolveInvoiceTemplate = (template, fallback = 'gst') => {
   if (ids.includes(template)) return template;
   if (ids.includes(fallback)) return fallback;
   return 'gst';
-};
-
-const TEMPLATE_THEMES = {
-  classic: {
-    headerFill: '#f5f5f5',
-    rowFill: '#fcfcfc',
-    borderColor: '#e5e5e5',
-    summaryFill: null,
-    accent: '#000000',
-    titleColor: '#000000'
-  },
-  modern: {
-    headerFill: '#e8f0ff',
-    rowFill: '#f6f8ff',
-    borderColor: '#d7def5',
-    summaryFill: '#eef2ff',
-    accent: '#2563eb',
-    titleColor: '#111827'
-  }
 };
 
 // @desc    Create new invoice
@@ -1052,13 +1031,7 @@ exports.downloadInvoicePdf = async (req, res) => {
     });
 
     doc.pipe(res);
-    const theme = TEMPLATE_THEMES[selectedTemplate] || TEMPLATE_THEMES.classic;
-
-    if (selectedTemplate === 'gst') {
-      renderGstInvoiceTemplate(doc, invoice, business, formatCurrencyINR, formatDate);
-    } else {
-      renderInvoiceTemplate(doc, invoice, business, (value) => formatCurrency(value, 'Rs.'), formatDate, theme);
-    }
+    renderGstInvoiceTemplate(doc, invoice, business, formatCurrencyINR, formatDate);
 
     doc.end();
   } catch (error) {
